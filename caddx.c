@@ -33,7 +33,7 @@ static int baud = DEFAULT_BAUD;
  * Byte: Description
  *  Bit: Description
  *
- * 0: Start character (0x7e)
+ * 0: Start character (CADDX_START)
  * 1: Length (not incl. escaped bytes and checksum)
  * 2:
  *  7: Ack required
@@ -74,7 +74,7 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len, uint32_t *out_len)
 	uint16_t cksum;
 
 	for (p = msg; p < msg + len; p++)
-		if (*p == 0x7e || *p == 0x7d)
+		if (*p == CADDX_START || *p == CADDX_START - 1)
 			escs++;
 	if (!(p = malloc(2 + len + escs + 2)))
 		ERR(ENOMEM);
@@ -85,10 +85,11 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len, uint32_t *out_len)
 
 	if (escs) {
 		for (i = 0; i < len; i++) {
-			if (p[2 + i + j] == CADDX_START) {
+			p[2 + i + j] = msg[i];
+			if (msg[i] == CADDX_START) {
 				p[2 + i +   j++]--;
 				p[2 + i +     j] = CADDX_START ^ CADDX_START_ESC;
-			} else if (p[2 + i + j] == CADDX_START - 1) {
+			} else if (msg[i] == CADDX_START - 1) {
 				p[2 + i + (++j)] = (CADDX_START - 1) ^ CADDX_START_ESC;
 			}
 		}
@@ -113,21 +114,58 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len, uint32_t *out_len)
 }
 
 static int
-caddx_rx(int fd)
+full_read(int fd, uint8_t *buf, uint32_t len)
 {
-	int i, len;
-	uint8_t buf[100] = { 0 };
+	int done = 0, i;
 
-	while (buf[0] != CADDX_START) {
-		if ((i = read(fd, buf, 1)) <= 0) {
+	while (len) {
+		if ((i = read(fd, buf + done, 1)) <= 0) {
 			if (errno == EAGAIN || errno == EINTR)
 				continue;
-			ERR(EIO);
+			if (i == 0)
+				errno = EIO;
+			return -1;
+		}
+		done += i;
+	}
+	return done;
+}
+
+#define CADDX_RX(len) do { \
+	fprintf(stderr, "read %d @%d\n", len, __LINE__); \
+	if (full_read(fd, buf + done, len) < 0) \
+		ERR(errno); \
+} while (0)
+
+static int
+caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
+{
+	int done = 0, len;
+	uint16_t cksum;
+
+	buf[0] = 0;
+	while (buf[0] != CADDX_START)
+		CADDX_RX(1);
+
+	CADDX_RX(1);
+	len = buf[0];
+
+	if (len > maxlen - 3)
+		ERR(EINVAL);
+
+	for (done = 1; len; len--, done++) {
+		CADDX_RX(1);
+		if (buf[done] == CADDX_START - 1) {
+			CADDX_RX(1);
+			buf[done] ^= CADDX_START_ESC;
 		}
 	}
-	
-	printf("^^ rx: \n");
-	hexdump(buf, i);
+
+	CADDX_RX(2);
+	cksum = fletcher_cksum(buf, len + 1);
+
+	printf("^^ rx: %x\n", cksum);
+	hexdump(buf, len + 3);
 
 	/* FALLTHROUGH */
  error:
@@ -181,6 +219,7 @@ serial_init(int fd)
 		ERR(EINVAL);
 	i = baud_rates[i].def;
 
+printf("^^ ser %d\n", i);
 	memset(&tio, 0, sizeof(tio));
 	tio.c_cflag = i | CS8 | CLOCAL | CREAD; /* TODO: Make CS8 modifiable */
 	tio.c_iflag = IGNPAR; /* TODO: Make modifiable */
@@ -205,7 +244,9 @@ main(int argc, char *argv[])
 {
 	int fd = -1, i;
 	char *ttyname = DEFAULT_TTYNAME;
-	uint8_t msg[] = { CADDX_IFACE_CFG_REQ }, *m = NULL;
+	uint8_t msg[] = { CADDX_IFACE_CFG_REQ };
+//	uint8_t msg[] = { 0x84, 0x09, 0x7e, 0x10, 0x58, 0x01, 0x00 };
+	uint8_t *m = NULL, buf[100];
 	uint32_t len;
 
 	while ((i = getopt(argc, argv, "t:")) != -1) {
@@ -224,7 +265,7 @@ main(int argc, char *argv[])
 	if (caddx_tx(fd, msg, sizeof(msg), &len) < 0)
 		ERR(errno);
 
-	if (caddx_rx(fd) < 0)
+	if (caddx_rx(fd, buf, sizeof(buf)) < 0)
 		ERR(errno);
 
 	/* FALLTHROUGH */
