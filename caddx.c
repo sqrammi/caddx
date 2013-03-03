@@ -24,11 +24,16 @@ int errline = 0;
 #define ERR(val) do { errno = (val); if (!errline) errline = __LINE__; goto error; } while (0)
 
 static int baud = DEFAULT_BAUD;
+static int synced = 0, sync_count = 1, sync_freq = 10;
 
 #define CADDX_START		0x7e
 #define CADDX_START_ESC		0x20
+#define CADDX_ACK_REQ		0x80
 
+#define CADDX_IFACE_CFG		0x01
 #define CADDX_IFACE_CFG_REQ	0x21
+#define CADDX_ACK		0x1d
+#define CADDX_NAK		0x1e
 
 /* CADDX Binary Protocol:
  * Byte: Description
@@ -68,7 +73,7 @@ fletcher_cksum(uint8_t *data, uint32_t len)
 #include "/home/ninkid/bin/hex-libc.c"
 
 static int
-caddx_tx(int fd, uint8_t *msg, uint32_t len, uint32_t *out_len)
+caddx_tx(int fd, uint8_t *msg, uint32_t len)
 {
 	uint8_t *p = NULL;
 	uint32_t escs = 0, i, j = 0;
@@ -134,7 +139,7 @@ full_read(int fd, uint8_t *buf, uint32_t len)
 }
 
 #define CADDX_RX(len) do { \
-	/* fprintf(stderr, "read %d @%d\n", len, __LINE__);*/ \
+	/* fprintf(stderr, "read %d @%d\n", len, __LINE__); */ \
 	if (full_read(fd, buf + done, len) < 0) \
 		ERR(errno); \
 } while (0)
@@ -166,8 +171,19 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 	CADDX_RX(2);
 	cksum = fletcher_cksum(buf, _len + 1);
 
-	if (cksum >> 8 != buf[done] || (cksum & 0xff) != buf[done + 1])
+	if (!buf[0])
+		goto error;
+
+	if (cksum >> 8 != buf[done] || (cksum & 0xff) != buf[done + 1]) {
+		uint8_t nak = CADDX_NAK;
+		caddx_tx(fd, &nak, 1);
 		ERR(EPROTO);
+	}
+
+	if (buf[1] & CADDX_ACK_REQ) {
+		uint8_t ack = CADDX_ACK;
+		caddx_tx(fd, &ack, 1);
+	}
 
 	/* FALLTHROUGH */
  error:
@@ -240,18 +256,41 @@ serial_init(int fd)
 	return 0;
 }
 
+static int
+caddx_parse(int fd, uint8_t *buf, uint32_t len)
+{
+	int i;
+
+	switch (buf[1]) {
+	case CADDX_IFACE_CFG:
+		if (len != 12)
+			goto error;
+		printf("NX version %.*s up, caps: ", 4, buf + 2);
+		synced = 1;
+		for (i = 0; i < 6; i++)
+			printf("%02x ", buf[6 + i]);
+		printf("\n");
+		break;
+	default:
+	error:
+		hexdump(buf, buf[0]);
+		break;
+	}
+	return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
 	int fd = -1, i;
 	char *ttyname = DEFAULT_TTYNAME;
-	uint8_t msg[] = { CADDX_IFACE_CFG_REQ };
-	uint8_t *m = NULL, buf[100];
-	uint32_t len;
+	uint8_t buf[128];
 	fd_set fds;
+	struct timeval tv;
 
 	while ((i = getopt(argc, argv, "t:")) != -1) {
 		switch (i) {
+		case 'b': baud = strtol(optarg, NULL, 0); break;
 		case 't': ttyname = optarg; break;
 		default: usage(); exit(-1);
 		}
@@ -263,24 +302,29 @@ main(int argc, char *argv[])
 	if (serial_init(fd) < 0)
 		ERR(errno);
 
-	if (caddx_tx(fd, msg, sizeof(msg), &len) < 0)
-		ERR(errno);
-
 	while (1) {
 		FD_ZERO(&fds);
 		FD_SET(fd, &fds);
 
-		i = select(fd + 1, &fds, NULL, NULL, NULL);
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+		i = select(fd + 1, &fds, NULL, NULL, &tv);
 		if (i > 0) {
 			caddx_rx(fd, buf, sizeof(buf));
-			hexdump(buf, buf[0]);
+			caddx_parse(fd, buf, buf[0] + 1);
+		}
+
+		if (!synced && !--sync_count) {
+			uint8_t sync = CADDX_IFACE_CFG_REQ;
+			printf("sync\n");
+			caddx_tx(fd, &sync, 1);
+			sync_count = sync_freq;
 		}
 	}
 
 
 	/* FALLTHROUGH */
  error:
-	if (m) free(m);
 	if (fd >= 0) close(fd);
 	if (errno) {
 		fprintf(stderr, "%s: error: %s @%d\n", __func__, strerror(errno), errline);
