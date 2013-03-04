@@ -22,6 +22,7 @@
 
 int errline = 0;
 #define ERR(val) do { errno = (val); if (!errline) errline = __LINE__; goto error; } while (0)
+#define BIT(x) (1 << (x))
 
 static int baud = DEFAULT_BAUD;
 static int synced = 0, sync_count = 1, sync_freq = 10;
@@ -29,11 +30,18 @@ static int synced = 0, sync_count = 1, sync_freq = 10;
 #define CADDX_START		0x7e
 #define CADDX_START_ESC		0x20
 #define CADDX_ACK_REQ		0x80
+#define CADDX_MSG_MASK		0x3f
 
 #define CADDX_IFACE_CFG		0x01
+#define CADDX_ZONE_STATUS	0x04
 #define CADDX_IFACE_CFG_REQ	0x21
 #define CADDX_ACK		0x1d
 #define CADDX_NAK		0x1e
+
+#define CADDX_ZONE_FAULTED	BIT(0)
+#define CADDX_ZONE_TAMPERED	BIT(1)
+#define CADDX_ZONE_TROUBLE	BIT(2)
+#define CADDX_ZONE_ACTIVITY	(CADDX_ZONE_FAULTED | CADDX_ZONE_TAMPERED | CADDX_ZONE_TROUBLE)
 
 /* CADDX Binary Protocol:
  * Byte: Description
@@ -122,12 +130,12 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len)
 }
 
 static int
-full_read(int fd, uint8_t *buf, uint32_t len)
+full_read(int fd, uint8_t *buf, uint32_t len, int dbg)
 {
 	int done = 0, i;
 
 	while (len) {
-		if ((i = read(fd, buf + done, len - done)) < 0) {
+		if ((i = read(fd, buf + done, len)) < 0) {
 			if (errno == EAGAIN || errno == EINTR)
 				continue;
 			return -1;
@@ -138,11 +146,12 @@ full_read(int fd, uint8_t *buf, uint32_t len)
 	return done;
 }
 
-#define CADDX_RX(len) do { \
-	/* fprintf(stderr, "read %d @%d\n", len, __LINE__); */ \
-	if (full_read(fd, buf + done, len) < 0) \
+#define _CADDX_RX(len, dbg) do { \
+	/*if (dbg) fprintf(stderr, "read %d @%d\n", len, __LINE__);*/ \
+	if (full_read(fd, buf + done, len, dbg) < 0) \
 		ERR(errno); \
 } while (0)
+#define CADDX_RX(len) _CADDX_RX(len, 0)
 
 static int
 caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
@@ -168,7 +177,7 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 		}
 	}
 
-	CADDX_RX(2);
+	_CADDX_RX(2, 1);
 	cksum = fletcher_cksum(buf, _len + 1);
 
 	if (!buf[0])
@@ -261,9 +270,9 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 {
 	int i;
 
-	switch (buf[1]) {
+	switch (buf[1] & CADDX_MSG_MASK) {
 	case CADDX_IFACE_CFG:
-		if (len != 12)
+		if (len != 11)
 			goto error;
 		printf("NX version %.*s up, caps: ", 4, buf + 2);
 		synced = 1;
@@ -271,9 +280,16 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 			printf("%02x ", buf[6 + i]);
 		printf("\n");
 		break;
+	case CADDX_ZONE_STATUS:
+		if (len != 8)
+			goto error;
+		if (buf[7] & CADDX_ZONE_ACTIVITY)
+			printf("zone %d activity\n", buf[2]);
+		else printf("zone %d ok\n", buf[2]);
+		break;
 	default:
 	error:
-		hexdump(buf, buf[0]);
+		hexdump(buf, buf[0] + 1);
 		break;
 	}
 	return 0;
@@ -311,7 +327,7 @@ main(int argc, char *argv[])
 		i = select(fd + 1, &fds, NULL, NULL, &tv);
 		if (i > 0) {
 			caddx_rx(fd, buf, sizeof(buf));
-			caddx_parse(fd, buf, buf[0] + 1);
+			caddx_parse(fd, buf, buf[0]);
 		}
 
 		if (!synced && !--sync_count) {
