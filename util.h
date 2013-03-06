@@ -5,6 +5,17 @@ extern int log_syslog;
 extern int loglevel;
 extern int quit;
 
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#define ERR(val) do { errno = (val); if (!errline) errline = __LINE__; goto error; } while (0)
+
+#define __str_1(x...)		#x
+#define __str(x...)		__str_1(x)
+
+#define BIT(x) (1 << (x))
+
 void msg(int level, const char *fmt, ...);
 #define err(fmt...)	msg(0, fmt)
 #define warn(fmt...)	msg(1, fmt)

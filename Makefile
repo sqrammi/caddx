@@ -4,7 +4,7 @@ else
 include .config
 endif
 
-PROGRAMS += caddx
+PROGRAMS += caddx caddx-mon
 
 CC=$(CROSS_COMPILE)gcc
 
@@ -14,6 +14,9 @@ ifdef POSTBUILD
 endif
 
 caddx: caddx.o util.o
+	$(CC) $^ $(LDFLAGS) -o $@
+
+caddx-mon: caddx-mon.o util.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 %.o: %.c

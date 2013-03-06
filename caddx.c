@@ -18,19 +18,11 @@
 #include "caddx.h"
 #include "util.h"
 
-#ifndef ARRAY_SIZE
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#endif
-#define __str_1(x...)		#x
-#define __str(x...)		__str_1(x)
-
 #define DEFAULT_TTYNAME	"/dev/ttyUSB0"
 #define DEFAULT_BAUD	38400
 #define DEFAULT_LISTEN	"127.0.0.1:1587"
 
 int errline = 0;
-#define ERR(val) do { errno = (val); if (!errline) errline = __LINE__; goto error; } while (0)
-#define BIT(x) (1 << (x))
 
 struct caddx_client {
 	int fd;
@@ -116,6 +108,7 @@ caddx_rm_client(struct caddx_client *cl)
 	struct caddx_client *l;
 
 	warn("rm client %d\n", cl->fd);
+	close(cl->fd); /* TODO: Check retval? */
 
 	if (cl == clients) {
 		clients = cl->next;
@@ -357,7 +350,7 @@ client_read(int fd, struct caddx_client *cl)
 int
 main(int argc, char *argv[])
 {
-	int fd = -1, i, sfd = -1, domain = AF_INET, max_fd = 0;
+	int fd = -1, i, sfd = -1, max_fd = 0;
 	char *ttyname = DEFAULT_TTYNAME, *listen_to = strdup(DEFAULT_LISTEN), *port;
 	uint8_t buf[128];
 	fd_set fds;
@@ -367,7 +360,6 @@ main(int argc, char *argv[])
 
 	while ((i = getopt(argc, argv, "b:fhl:t:v")) != -1) {
 		switch (i) {
-		case '6': domain = AF_INET6; break;
 		case 'b': baud = strtol(optarg, NULL, 0); break;
 		case 'f': fg = 1; break;
 		case 'l': free(listen_to); listen_to = strdup(optarg); break;
@@ -386,7 +378,7 @@ main(int argc, char *argv[])
 	if (serial_init(fd) < 0)
 		ERR(errno);
 
-	if ((port = index(listen_to, ':')) == NULL)
+	if ((port = rindex(listen_to, ':')) == NULL)
 		ERR(EINVAL);
 	*(port++) = 0;
 
@@ -402,8 +394,6 @@ main(int argc, char *argv[])
 		i = 1;
 		setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
 
-//printf("^^ bind to %s\n", inet_ntoa(((struct sockaddr_in *)pai->ai_addr)->sin_addr));
-//printf("^^ bind to %d\n", ((struct sockaddr_in *)pai->ai_addr)->sin_port);
 		if (bind(sfd, pai->ai_addr, pai->ai_addrlen) < 0) {
  sock_error:
 			close(sfd);
