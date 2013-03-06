@@ -13,7 +13,7 @@ ifdef POSTBUILD
 	$(POSTBUILD)
 endif
 
-caddx: caddx.o
+caddx: caddx.o util.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 %.o: %.c

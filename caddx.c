@@ -10,6 +10,13 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/select.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+
+#include "caddx.h"
+#include "util.h"
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -19,29 +26,23 @@
 
 #define DEFAULT_TTYNAME	"/dev/ttyUSB0"
 #define DEFAULT_BAUD	38400
+#define DEFAULT_LISTEN	"127.0.0.1:1587"
 
 int errline = 0;
 #define ERR(val) do { errno = (val); if (!errline) errline = __LINE__; goto error; } while (0)
 #define BIT(x) (1 << (x))
 
+struct caddx_client {
+	int fd;
+	struct sockaddr addr;
+	socklen_t addr_len;
+	struct caddx_client *next;
+};
+
 static int baud = DEFAULT_BAUD;
 static int synced = 0, sync_count = 1, sync_freq = 10;
-
-#define CADDX_START		0x7e
-#define CADDX_START_ESC		0x20
-#define CADDX_ACK_REQ		0x80
-#define CADDX_MSG_MASK		0x3f
-
-#define CADDX_IFACE_CFG		0x01
-#define CADDX_ZONE_STATUS	0x04
-#define CADDX_IFACE_CFG_REQ	0x21
-#define CADDX_ACK		0x1d
-#define CADDX_NAK		0x1e
-
-#define CADDX_ZONE_FAULTED	BIT(0)
-#define CADDX_ZONE_TAMPERED	BIT(1)
-#define CADDX_ZONE_TROUBLE	BIT(2)
-#define CADDX_ZONE_ACTIVITY	(CADDX_ZONE_FAULTED | CADDX_ZONE_TAMPERED | CADDX_ZONE_TROUBLE)
+static int fg = 0;
+static struct caddx_client *clients = NULL;
 
 /* CADDX Binary Protocol:
  * Byte: Description
@@ -55,28 +56,8 @@ static int synced = 0, sync_count = 1, sync_freq = 10;
  *  0-5: Message type
  * ... Message
  * N-1: Fletcher sum1
- * N: Fletcher sum1
+ * N: Fletcher sum2
  */
-
-static uint16_t
-fletcher_cksum(uint8_t *data, uint32_t len)
-{
-	uint8_t sum1 = 0, sum2 = 0;
-	uint32_t i;
-	for (i = 0; i < len; i++) {
-		if (255 - sum1 < data[i])
-			sum1++;
-		sum1 += data[i];
-		if (sum1 == 255)
-			sum1 = 0;
-		if (255 - sum2 < sum1)
-			sum2++;
-		sum2 += sum1;
-		if (sum2 == 255)
-			sum2 = 0;
-	}
-	return (sum1 << 8) | sum2;
-}
 
 #include "/home/ninkid/bin/hex-libc.c"
 
@@ -129,26 +110,27 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len)
 	return 0;
 }
 
-static int
-full_read(int fd, uint8_t *buf, uint32_t len, int dbg)
+static void
+caddx_rm_client(struct caddx_client *cl)
 {
-	int done = 0, i;
+	struct caddx_client *l;
 
-	while (len) {
-		if ((i = read(fd, buf + done, len)) < 0) {
-			if (errno == EAGAIN || errno == EINTR)
-				continue;
-			return -1;
-		}
-		done += i;
-		len -= i;
+	warn("rm client %d\n", cl->fd);
+
+	if (cl == clients) {
+		clients = cl->next;
+		return;
 	}
-	return done;
+	for (l = clients; l && l->next != cl; l = l->next) {}
+	if (!l || l->next != cl)
+		err("corrupt client list %p/%p", l, l ? l->next : NULL);
+	l->next = cl->next;
+	free(cl);
 }
 
 #define _CADDX_RX(len, dbg) do { \
-	/*if (dbg) fprintf(stderr, "read %d @%d\n", len, __LINE__);*/ \
-	if (full_read(fd, buf + done, len, dbg) < 0) \
+	debug("read %d @%d\n", len, __LINE__); \
+	if (full_read(fd, buf + done, len, 0) != len) \
 		ERR(errno); \
 } while (0)
 #define CADDX_RX(len) _CADDX_RX(len, 0)
@@ -158,6 +140,7 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 {
 	int done = 0, len, _len;
 	uint16_t cksum;
+	struct caddx_client *cl;
 
 	buf[0] = 0;
 	while (buf[0] != CADDX_START)
@@ -194,21 +177,15 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 		caddx_tx(fd, &ack, 1);
 	}
 
+	for (cl = clients; cl; cl = cl->next)
+		if (full_write(cl->fd, buf, 1 + buf[0], 1) < 0)
+			caddx_rm_client(cl);
+
 	/* FALLTHROUGH */
  error:
 	if (errno)
 		return -1;
 	return 0;
-}
-
-static void
-usage(void)
-{
-	printf("\
-Usage: caddx [flags]\n\
--b ...: baud (default " __str(DEFAULT_BAUD) ")\n\
--t ...: tty name (default " DEFAULT_TTYNAME ")\n\
-");
 }
 
 struct baud_rate {
@@ -274,18 +251,18 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 	case CADDX_IFACE_CFG:
 		if (len != 11)
 			goto error;
-		printf("NX version %.*s up, caps: ", 4, buf + 2);
+		err("NX version %.*s up, caps: ", 4, buf + 2);
 		synced = 1;
 		for (i = 0; i < 6; i++)
-			printf("%02x ", buf[6 + i]);
-		printf("\n");
+			err("%02x ", buf[6 + i]);
+		err("\n");
 		break;
 	case CADDX_ZONE_STATUS:
 		if (len != 8)
 			goto error;
 		if (buf[7] & CADDX_ZONE_ACTIVITY)
-			printf("zone %d activity\n", buf[2]);
-		else printf("zone %d ok\n", buf[2]);
+			err("zone %d activity\n", buf[2]);
+		else err("zone %d ok\n", buf[2]);
 		break;
 	default:
 	error:
@@ -295,22 +272,117 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 	return 0;
 }
 
+static void
+usage(void)
+{
+	printf("\
+Usage: caddx [flags]\n\
+-b ...: Baud (default " __str(DEFAULT_BAUD) ")\n\
+-f    : Run in foreground\n\
+-l ...: Listen to HOST:PORT (default " DEFAULT_LISTEN ")\n\
+-t ...: TTY name (default " DEFAULT_TTYNAME ")\n\
+-v    : Increase verbosity\n\
+");
+}
+
+static void caddx_signal(int signum)
+{
+	if (signum == SIGINT)
+		quit = 1;
+}
+
+static int
+can_read(int fd)
+{
+	fd_set rfds;
+	struct timeval tv = { 0 };
+	FD_ZERO(&rfds);
+	FD_SET(fd, &rfds);
+	return select(fd + 1, &rfds, NULL, NULL, &tv) > 0;
+}
+
+static int
+handle_connect(int sfd)
+{
+	struct timeval timeout = { 0 };
+
+	struct caddx_client *cl = malloc(sizeof(*cl)), *p;
+	if (!cl)
+		ERR(ENOMEM);
+
+	memset(cl, 0, sizeof(*cl));
+	if ((cl->fd = accept(sfd, &cl->addr, &cl->addr_len)) < 0)
+{
+printf("^^ accept %d = %d/%s\n", sfd, cl->fd, strerror(errno));
+		ERR(errno);
+}
+
+	timeout.tv_sec = 5;
+	setsockopt(cl->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+	setsockopt(cl->fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+	if (!clients)
+		clients = cl;
+	else {
+		for (p = clients; !p->next; p = p->next) {}
+		p->next = cl;
+	}
+	warn("add client %d\n", cl->fd);
+
+	/* FALLTHROUGH */
+ error:
+	if (errno) {
+		if (cl) free(cl);
+		return -1;
+	}
+	return 0;
+}
+
+static int
+client_read(int fd, struct caddx_client *cl)
+{
+	uint8_t len, buf[128];
+
+	if (full_read(cl->fd, &len, 1, 1) < 0 ||
+	    len > sizeof(buf)) {
+		caddx_rm_client(cl);
+		return -1;
+	}
+
+	if (full_read(cl->fd, buf, len, 1) < 0) {
+		caddx_rm_client(cl);
+		return -1;
+	}
+
+	caddx_tx(fd, buf, len);
+	return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
-	int fd = -1, i;
-	char *ttyname = DEFAULT_TTYNAME;
+	int fd = -1, i, sfd = -1, domain = AF_INET, max_fd = 0;
+	char *ttyname = DEFAULT_TTYNAME, *listen_to = strdup(DEFAULT_LISTEN), *port;
 	uint8_t buf[128];
 	fd_set fds;
 	struct timeval tv;
+	struct sigaction action = { 0 };
+	struct addrinfo gai = { 0 }, *ai, *pai;
 
-	while ((i = getopt(argc, argv, "t:")) != -1) {
+	while ((i = getopt(argc, argv, "b:fhl:t:v")) != -1) {
 		switch (i) {
+		case '6': domain = AF_INET6; break;
 		case 'b': baud = strtol(optarg, NULL, 0); break;
+		case 'f': fg = 1; break;
+		case 'l': free(listen_to); listen_to = strdup(optarg); break;
 		case 't': ttyname = optarg; break;
+		case 'v': loglevel++; break;
 		default: usage(); exit(-1);
 		}
 	}
+
+	action.sa_handler = caddx_signal;
+	sigaction(SIGINT, &action, NULL);
 
 	if ((fd = open(ttyname, O_RDWR | O_NOCTTY)) < 0)
 		ERR(errno);
@@ -318,21 +390,81 @@ main(int argc, char *argv[])
 	if (serial_init(fd) < 0)
 		ERR(errno);
 
-	while (1) {
+	if ((port = index(listen_to, ':')) == NULL)
+		ERR(EINVAL);
+	*(port++) = 0;
+
+	gai.ai_family = AF_UNSPEC;
+	gai.ai_socktype = SOCK_STREAM;
+	if ((i = getaddrinfo(listen_to, port, (const struct addrinfo *)&gai, &ai)) != 0)
+		ERR(i);
+
+	for (pai = ai; pai; pai = pai->ai_next) {
+		if ((sfd = socket(pai->ai_family, pai->ai_socktype, pai->ai_protocol)) < 0)
+			continue;
+
+		i = 1;
+		setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(i));
+
+//printf("^^ bind to %s\n", inet_ntoa(((struct sockaddr_in *)pai->ai_addr)->sin_addr));
+//printf("^^ bind to %d\n", ((struct sockaddr_in *)pai->ai_addr)->sin_port);
+		if (bind(sfd, pai->ai_addr, pai->ai_addrlen) < 0) {
+ sock_error:
+			close(sfd);
+			continue;
+		}
+
+		if (listen(sfd, 5) < 0)
+			goto sock_error;
+		break;
+	}
+	freeaddrinfo(ai);
+	if (!pai) {
+		if (!errno)
+			errno = EINVAL;
+		ERR(errno);
+	}
+
+	if (!fg) {
+		log_syslog = 1;
+		if ((i = fork()) < 0)
+			ERR(errno);
+		if (i != 0)
+			goto error;
+	}
+
+	while (!quit) {
+		struct caddx_client *cl = clients;
 		FD_ZERO(&fds);
 		FD_SET(fd, &fds);
+		FD_SET(sfd, &fds);
+		max_fd = fd;
+		if (sfd > fd)
+			max_fd = sfd;
+		for (cl = clients; cl; cl = cl->next) {
+			FD_SET(cl->fd, &fds);
+			if (cl->fd > max_fd)
+				max_fd = cl->fd;
+		}
 
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
-		i = select(fd + 1, &fds, NULL, NULL, &tv);
-		if (i > 0) {
+		i = select(max_fd + 1, &fds, NULL, NULL, &tv);
+		if (can_read(fd)) {
 			caddx_rx(fd, buf, sizeof(buf));
 			caddx_parse(fd, buf, buf[0]);
 		}
+		if (can_read(sfd)) {
+			handle_connect(sfd);
+			errno = errline = 0;
+		}
+		for (cl = clients; cl; cl = cl->next)
+			if (can_read(cl->fd))
+				client_read(fd, cl);
 
 		if (!synced && !--sync_count) {
 			uint8_t sync = CADDX_IFACE_CFG_REQ;
-			printf("sync\n");
+			info("sync\n");
 			caddx_tx(fd, &sync, 1);
 			sync_count = sync_freq;
 		}
@@ -341,9 +473,11 @@ main(int argc, char *argv[])
 
 	/* FALLTHROUGH */
  error:
+	if (listen_to) free(listen_to);
 	if (fd >= 0) close(fd);
-	if (errno) {
-		fprintf(stderr, "%s: error: %s @%d\n", __func__, strerror(errno), errline);
+	if (sfd >= 0) close(sfd);
+	if (errno && errline) {
+		err("%s: error: %s @%d\n", __func__, strerror(errno), errline);
 		errno = errline = 0;
 		return -1;
 	}
