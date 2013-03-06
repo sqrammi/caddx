@@ -245,17 +245,13 @@ serial_init(int fd)
 static int
 caddx_parse(int fd, uint8_t *buf, uint32_t len)
 {
-	int i;
-
 	switch (buf[1] & CADDX_MSG_MASK) {
 	case CADDX_IFACE_CFG:
 		if (len != 11)
 			goto error;
-		err("NX version %.*s up, caps: ", 4, buf + 2);
+		err("NX version %.*s up, caps: %02x %02x %02x %02x %02x %02x\n", 4, buf + 2,
+			buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
 		synced = 1;
-		for (i = 0; i < 6; i++)
-			err("%02x ", buf[6 + i]);
-		err("\n");
 		break;
 	case CADDX_ZONE_STATUS:
 		if (len != 8)
