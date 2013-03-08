@@ -99,12 +99,16 @@ main(int argc, char *argv[])
 		ERR(errno);
 	}
 
+	buf[0] = 1;
+	buf[1] = CADDX_IFACE_CFG_REQ;
+	full_write(fd, buf, 2, 1);
+
 	while (!quit) {
-		if (full_read(fd, &len, 1, 1) < 0)
+		if (full_read(fd, &len, 1, 1) != 1)
 			ERR(-EIO);
 		if (len > sizeof(buf))
 			ERR(-EIO);
-		if (full_read(fd, buf, len, 1) < 0)
+		if (full_read(fd, buf, len, 1) != len)
 			ERR(-EIO);
 		caddx_parse(fd, buf, len);
 	}
