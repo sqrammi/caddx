@@ -51,8 +51,6 @@ static struct caddx_client *clients = NULL;
  * N: Fletcher sum2
  */
 
-#include "/home/ninkid/bin/hex-libc.c"
-
 static int
 caddx_tx(int fd, uint8_t *msg, uint32_t len)
 {
@@ -241,21 +239,10 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 	switch (buf[1] & CADDX_MSG_MASK) {
 	case CADDX_IFACE_CFG:
 		if (len != 11)
-			goto error;
+			return -1;
 		err("NX version %.*s up, caps: %02x %02x %02x %02x %02x %02x\n", 4, buf + 2,
 			buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
 		synced = 1;
-		break;
-	case CADDX_ZONE_STATUS:
-		if (len != 8)
-			goto error;
-		if (buf[7] & CADDX_ZONE_ACTIVITY)
-			err("zone %d activity\n", buf[2]);
-		else err("zone %d ok\n", buf[2]);
-		break;
-	default:
-	error:
-		hexdump(buf, buf[0] + 1);
 		break;
 	}
 	return 0;
