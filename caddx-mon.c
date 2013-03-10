@@ -9,6 +9,7 @@
 #include <netdb.h>
 #include <signal.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #include "caddx.h"
 #include "util.h"
@@ -22,7 +23,11 @@ static uint32_t part_sirened = 0;
 
 static void caddx_signal(int signum)
 {
-	if (signum == SIGINT)
+	int to = 10;
+
+	if (signum == SIGCHLD) {
+		while (waitpid(-1, NULL, WNOHANG) >= 0 && --to) {}
+	} else if (signum == SIGINT)
 		quit = 1;
 }
 
@@ -149,6 +154,7 @@ main(int argc, char *argv[])
 	memset(&action, 0, sizeof(action));
 	action.sa_handler = caddx_signal;
 	sigaction(SIGINT, &action, NULL);
+	sigaction(SIGCHLD, &action, NULL);
 
 	gai.ai_family = AF_UNSPEC;
 	gai.ai_socktype = SOCK_STREAM;
@@ -192,8 +198,11 @@ main(int argc, char *argv[])
 
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
-		if ((i = select(fd + 1, &fds, NULL, NULL, &tv)) < 0)
+		if ((i = select(fd + 1, &fds, NULL, NULL, &tv)) < 0) {
+			if (errno == EINTR)
+				continue;
 			ERR(-errno);
+		}
 
 		if (i == 0) {
 			if (!--part_status_count) {
