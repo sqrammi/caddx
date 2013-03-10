@@ -10,7 +10,7 @@ int log_syslog = 0;
 int quit = 0;
 
 void
-msg(int level, const char *fmt, ...)
+message(int level, const char *fmt, ...)
 {
 	char buf[128];
 	va_list ap;

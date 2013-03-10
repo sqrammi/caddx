@@ -30,23 +30,37 @@ usage(void)
 	printf("\
 Usage: caddx-mon [options]\n\
 -H ...: Host to connect to\n\
+-v    : Increase logging\n\
 ");
 }
 
 void
 caddx_parse(int fd, uint8_t *buf, uint32_t len)
 {
-	switch (buf[0] & CADDX_MSG_MASK) {
-	case CADDX_ZONE_STATUS:
-		if (len != 8)
+	struct caddx_msg *msg = (struct caddx_msg *)buf;
+
+	switch (msg->type) {
+	case CADDX_ZONE_STATUS: {
+		struct caddx_zone_status *status = (struct caddx_zone_status *)buf;
+		if (len != sizeof(*status))
 			goto error;
-		if (buf[6] & CADDX_ZONE_ACTIVITY)
-			err("zone %d activity\n", buf[1] + 1);
-		else err("zone %d ok\n", buf[1] + 1);
+		if (status->faulted || status->tampered || status->trouble)
+			err("zone %d activity\n", status->zone + 1);
+		else err("zone %d ok\n", status->zone + 1);
 		break;
+	}
+	case CADDX_PART_STATUS: {
+		struct caddx_part_status *status = (struct caddx_part_status *)buf;
+		if (status->siren_on) {
+			printf("^^ siren on\n");
+		}
+		hexdump(buf, sizeof(*status));
+		break;
+	}
 	default:
 	error:
-		hexdump(buf, len);
+		if (loglevel >= 1)
+			hexdump(buf, len);
 		break;
 	}
 }
@@ -58,11 +72,12 @@ main(int argc, char *argv[])
 	char *host = strdup(DEFAULT_HOST), *port;
 	uint8_t buf[128], len;
 	struct addrinfo gai = { 0 }, *ai, *pai;
-	struct sigaction action = { 0 };
+	struct sigaction action;
 
 	while ((i = getopt(argc, argv, "H:")) != -1) {
 		switch (i) {
 		case 'H': free(host); host = strdup(optarg); break;
+		case 'v': loglevel++; break;
 		default: usage(); return -1;
 		}
 	}
@@ -71,6 +86,7 @@ main(int argc, char *argv[])
 		ERR(EINVAL);
 	*(port++) = 0;
 
+	memset(&action, 0, sizeof(action));
 	action.sa_handler = caddx_signal;
 	sigaction(SIGINT, &action, NULL);
 

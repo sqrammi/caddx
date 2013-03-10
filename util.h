@@ -16,11 +16,11 @@ extern int quit;
 
 #define BIT(x) (1 << (x))
 
-void msg(int level, const char *fmt, ...);
-#define err(fmt...)	msg(0, fmt)
-#define warn(fmt...)	msg(1, fmt)
-#define info(fmt...)	msg(2, fmt)
-#define debug(fmt...)	msg(3, fmt)
+void message(int level, const char *fmt, ...);
+#define err(fmt...)	message(0, fmt)
+#define warn(fmt...)	message(1, fmt)
+#define info(fmt...)	message(2, fmt)
+#define debug(fmt...)	message(3, fmt)
 
 int full_write(int fd, uint8_t *buf, uint32_t len, int eagain_quit);
 int full_read(int fd, uint8_t *buf, uint32_t len, int eagain_quit);

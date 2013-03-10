@@ -132,6 +132,7 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 	int done = 0, len, _len;
 	uint16_t cksum;
 	struct caddx_client *cl;
+	struct caddx_msg *msg;
 
 	buf[0] = 0;
 	while (buf[0] != CADDX_START)
@@ -163,7 +164,8 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 		ERR(EPROTO);
 	}
 
-	if (buf[1] & CADDX_ACK_REQ) {
+	msg = (struct caddx_msg *)(buf + 1);
+	if (msg->ack) {
 		uint8_t ack = CADDX_ACK;
 		caddx_tx(fd, &ack, 1);
 	}
@@ -236,12 +238,14 @@ serial_init(int fd)
 static int
 caddx_parse(int fd, uint8_t *buf, uint32_t len)
 {
-	switch (buf[1] & CADDX_MSG_MASK) {
+	struct caddx_msg *msg = (struct caddx_msg *)buf;
+
+	switch (msg->type) {
 	case CADDX_IFACE_CFG:
 		if (len != 11)
 			return -1;
-		err("NX version %.*s up, caps: %02x %02x %02x %02x %02x %02x\n", 4, buf + 2,
-			buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
+		err("NX version %.*s up, caps: %02x %02x %02x %02x %02x %02x\n", 4, buf + 1,
+			buf[5], buf[6], buf[7], buf[8], buf[9], buf[10]);
 		synced = 1;
 		break;
 	}
@@ -342,7 +346,7 @@ main(int argc, char *argv[])
 	uint8_t buf[128];
 	fd_set fds;
 	struct timeval tv;
-	struct sigaction action = { 0 };
+	struct sigaction action;
 	struct addrinfo gai = { 0 }, *ai, *pai;
 
 	while ((i = getopt(argc, argv, "b:fhl:t:v")) != -1) {
@@ -356,6 +360,7 @@ main(int argc, char *argv[])
 		}
 	}
 
+	memset(&action, 0, sizeof(action));
 	action.sa_handler = caddx_signal;
 	sigaction(SIGINT, &action, NULL);
 
@@ -425,7 +430,7 @@ main(int argc, char *argv[])
 		i = select(max_fd + 1, &fds, NULL, NULL, &tv);
 		if (can_read(fd)) {
 			caddx_rx(fd, buf, sizeof(buf));
-			caddx_parse(fd, buf, buf[0]);
+			caddx_parse(fd, buf + 1, buf[0]);
 		}
 		if (can_read(sfd)) {
 			handle_connect(sfd);
