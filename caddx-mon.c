@@ -16,7 +16,9 @@
 
 #define DEFAULT_HOST	"127.0.0.1:1587"
 
-int errline = 0;
+int errline = 0, fg;
+static char *notify_proc = NULL;
+static uint32_t part_sirened = 0;
 
 static void caddx_signal(int signum)
 {
@@ -29,9 +31,51 @@ usage(void)
 {
 	printf("\
 Usage: caddx-mon [options]\n\
+-e ...: Execute ... upon event occurences\n\
+        The environment will contain information about the event:\n\
+        TYPE: zone or part\n\
+        ID: zone or partition number\n\
+        EVENT: active/inactive or siren\n\
+-f    : Run in foreground\n\
 -H ...: Host to connect to\n\
 -v    : Increase logging\n\
 ");
+}
+
+static int
+proc_notify(const char *type, int _id, const char *event)
+{
+	int pid;
+	char *argv[2], id[16];
+
+	if (!notify_proc)
+		return -1;
+
+	argv[0] = notify_proc;
+	argv[1] = NULL;
+
+	if ((pid = fork()) < 0) {
+		err("%s", strerror(errno));
+		return -1;
+	}
+
+	if (pid > 0)
+		return 0;
+
+	setsid();
+	sprintf(id, "%d", _id);
+	setenv("TYPE", type, 1);
+	setenv("ID", id, 1);
+	setenv("EVENT", event, 1);
+
+	if (loglevel == 0) {
+		freopen("/dev/null", "r", stdin);
+		freopen("/dev/null", "w", stdout);
+		freopen("/dev/null", "w", stderr);
+	}
+
+	execv(argv[0], argv);
+	exit(-1);
 }
 
 void
@@ -44,17 +88,28 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 		struct caddx_zone_status *status = (struct caddx_zone_status *)buf;
 		if (len != sizeof(*status))
 			goto error;
-		if (status->faulted || status->tampered || status->trouble)
-			err("zone %d activity\n", status->zone + 1);
-		else err("zone %d ok\n", status->zone + 1);
+		if (status->faulted || status->tampered || status->trouble) {
+			proc_notify("zone", status->zone + 1, "active");
+			warn("zone %d activity\n", status->zone + 1);
+		} else {
+			proc_notify("zone", status->zone + 1, "inactive");
+			warn("zone %d ok\n", status->zone + 1);
+		}
 		break;
 	}
 	case CADDX_PART_STATUS: {
 		struct caddx_part_status *status = (struct caddx_part_status *)buf;
 		if (status->siren_on) {
-			printf("^^ siren on\n");
+			if (!(part_sirened & (1 << status->part))) {
+				proc_notify("part", status->part + 1, "siren");
+				part_sirened |= (1 << status->part);
+			}
+		} else {
+			if (part_sirened & (1 << status->part)) {
+				proc_notify("part", status->part + 1, "siren_off");
+				part_sirened &= ~(1 << status->part);
+			}
 		}
-		hexdump(buf, sizeof(*status));
 		break;
 	}
 	default:
@@ -74,8 +129,9 @@ main(int argc, char *argv[])
 	struct addrinfo gai = { 0 }, *ai, *pai;
 	struct sigaction action;
 
-	while ((i = getopt(argc, argv, "H:")) != -1) {
+	while ((i = getopt(argc, argv, "e:H:v")) != -1) {
 		switch (i) {
+		case 'e': notify_proc = optarg; break;
 		case 'H': free(host); host = strdup(optarg); break;
 		case 'v': loglevel++; break;
 		default: usage(); return -1;
@@ -94,6 +150,15 @@ main(int argc, char *argv[])
 	gai.ai_socktype = SOCK_STREAM;
 	if ((i = getaddrinfo(host, port, (const struct addrinfo *)&gai, &ai)) != 0)
 		ERR(i);
+
+	if (!fg) {
+		log_syslog = 1;
+		if ((i = fork()) < 0)
+			ERR(errno);
+		if (i != 0)
+			goto error;
+		setsid();
+	}
 
 	for (pai = ai; pai; pai = pai->ai_next) {
 		if ((fd = socket(pai->ai_family, pai->ai_socktype, pai->ai_protocol)) < 0)

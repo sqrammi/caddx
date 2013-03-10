@@ -409,6 +409,7 @@ main(int argc, char *argv[])
 			ERR(errno);
 		if (i != 0)
 			goto error;
+		setsid();
 	}
 
 	while (!quit) {
