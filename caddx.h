@@ -11,6 +11,7 @@
 
 #define CADDX_IFACE_CFG		0x01
 #define CADDX_IFACE_CFG_REQ	0x21
+#define CADDX_PART_STATUS_REQ	0x26
 #define CADDX_ACK		0x1d
 #define CADDX_NAK		0x1e
 

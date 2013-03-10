@@ -38,6 +38,7 @@ Usage: caddx-mon [options]\n\
         EVENT: active/inactive or siren\n\
 -f    : Run in foreground\n\
 -H ...: Host to connect to\n\
+-p ...: Partition to poll\n\
 -v    : Increase logging\n\
 ");
 }
@@ -123,16 +124,19 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 int
 main(int argc, char *argv[])
 {
-	int i, fd = -1;
+	int i, fd = -1, poll_part = 0;
 	char *host = strdup(DEFAULT_HOST), *port;
+	int part_status_count = 1, part_status_freq = 30;
 	uint8_t buf[128], len;
 	struct addrinfo gai = { 0 }, *ai, *pai;
 	struct sigaction action;
 
-	while ((i = getopt(argc, argv, "e:H:v")) != -1) {
+	while ((i = getopt(argc, argv, "e:fH:v")) != -1) {
 		switch (i) {
 		case 'e': notify_proc = optarg; break;
+		case 'f': fg = 1; break;
 		case 'H': free(host); host = strdup(optarg); break;
+		case 'p': poll_part = strtol(optarg, NULL, 0) - 1; break;
 		case 'v': loglevel++; break;
 		default: usage(); return -1;
 		}
@@ -180,11 +184,28 @@ main(int argc, char *argv[])
 		ERR(errno);
 	}
 
-	buf[0] = 1;
-	buf[1] = CADDX_IFACE_CFG_REQ;
-	full_write(fd, buf, 2, 1);
-
 	while (!quit) {
+		fd_set fds;
+		struct timeval tv;
+		FD_ZERO(&fds);
+		FD_SET(fd, &fds);
+
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+		if ((i = select(fd + 1, &fds, NULL, NULL, &tv)) < 0)
+			ERR(-errno);
+
+		if (i == 0) {
+			if (!--part_status_count) {
+				buf[0] = 2;
+				buf[1] = CADDX_PART_STATUS_REQ,
+				buf[2] = poll_part;
+				full_write(fd, buf, 3, 1);
+				part_status_count = part_status_freq;
+			}
+			continue;
+		}
+
 		if (full_read(fd, &len, 1, 1) != 1)
 			ERR(-EIO);
 		if (len > sizeof(buf))
