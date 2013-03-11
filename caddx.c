@@ -285,17 +285,13 @@ static int
 handle_connect(int sfd)
 {
 	struct timeval timeout = { 0 };
-
 	struct caddx_client *cl = malloc(sizeof(*cl)), *p;
 	if (!cl)
 		ERR(ENOMEM);
 
 	memset(cl, 0, sizeof(*cl));
 	if ((cl->fd = accept(sfd, &cl->addr, &cl->addr_len)) < 0)
-{
-printf("^^ accept %d = %d/%s\n", sfd, cl->fd, strerror(errno));
 		ERR(errno);
-}
 
 	timeout.tv_sec = 5;
 	setsockopt(cl->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -304,7 +300,7 @@ printf("^^ accept %d = %d/%s\n", sfd, cl->fd, strerror(errno));
 	if (!clients)
 		clients = cl;
 	else {
-		for (p = clients; !p->next; p = p->next) {}
+		for (p = clients; p->next; p = p->next) {}
 		p->next = cl;
 	}
 	warn("add client %d\n", cl->fd);
