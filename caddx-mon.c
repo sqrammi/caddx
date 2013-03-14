@@ -168,7 +168,7 @@ main(int argc, char *argv[])
 		case 'e': notify_proc = optarg; break;
 		case 'f': fg = 1; break;
 		case 'H': free(host); host = strdup(optarg); break;
-		case 'P': pin = strtol(optarg, NULL, 0); break;
+		case 'P': pin = strtol(optarg, NULL, 10); break;
 		case 'p': poll_part = strtol(optarg, NULL, 0) - 1; break;
 		case 'v': loglevel++; break;
 		case 'X': sec_fn = strtol(optarg, NULL, 0); break;
