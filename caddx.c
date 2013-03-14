@@ -321,11 +321,13 @@ client_read(int fd, struct caddx_client *cl)
 
 	if (full_read(cl->fd, &len, 1, 1) < 0 ||
 	    len > sizeof(buf)) {
+		err("failed read %d\n", cl->fd);
 		caddx_rm_client(cl);
 		return -1;
 	}
 
 	if (full_read(cl->fd, buf, len, 1) < 0) {
+		err("failed read2 %d\n", cl->fd);
 		caddx_rm_client(cl);
 		return -1;
 	}

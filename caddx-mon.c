@@ -220,7 +220,7 @@ main(int argc, char *argv[])
 		ERR(errno);
 	}
 
-	if (pri_fn) {
+	if (pri_fn >= 0) {
 		if (pin >= 0) {
 			struct caddx_keypad_func0 func = {{ 0 }};
 			func.msg.type = CADDX_KEYPAD_FUNC0;
@@ -240,6 +240,9 @@ main(int argc, char *argv[])
 			}
 			func.function = pri_fn;
 			func.part = (1 << poll_part);
+			buf[0] = sizeof(func);
+			if (full_write(fd, buf, 1, 1) < 0)
+				ERR(-errno);
 			if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
 				ERR(-errno);
 			goto error;
@@ -249,16 +252,22 @@ main(int argc, char *argv[])
 			func.msg.ack = 1;
 			func.function = pri_fn;
 			func.part = (1 << poll_part);
+			buf[0] = sizeof(func);
+			if (full_write(fd, buf, 1, 1) < 0)
+				ERR(-errno);
 			if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
 				ERR(-errno);
 			goto error;
 		}
-	} else if (sec_fn) {
+	} else if (sec_fn >= 0) {
 		struct caddx_keypad_func1 func = {{ 0 }};
 		func.msg.type = CADDX_KEYPAD_FUNC1;
 		func.msg.ack = 1;
 		func.function = sec_fn;
 		func.part = (1 << poll_part);
+		buf[0] = sizeof(func);
+		if (full_write(fd, buf, 1, 1) < 0)
+			ERR(-errno);
 		if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
 			ERR(-errno);
 		goto error;
