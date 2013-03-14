@@ -43,8 +43,35 @@ Usage: caddx-mon [options]\n\
         EVENT: active/inactive or siren\n\
 -f    : Run in foreground\n\
 -H ...: Host to connect to\n\
--p ...: Partition to poll\n\
+-P ...: Use PIN for primary function\n\
+-p ...: Partition to poll or perform function on (default 1)\n\
 -v    : Increase logging\n\
+-x ...: Primary function\n\
+     0: Turn off sounder/alarm\n\
+     1: Disarm\n\
+     2: Arm in away mode\n\
+     3: Arm in stay mode\n\
+     4: Cancel\n\
+     5: Initiate auto-arm\n\
+     6: Start walk-test mode\n\
+     6: Stop walk-test mode\n\
+-X ...: Secondary function\n\
+     0: Stay\n\
+     1: Chime\n\
+     2: Exit\n\
+     3: Bypass Interiors\n\
+     4: Fire Panic\n\
+     5: Medical Panic\n\
+     6: Police Panic\n\
+     7: Smoke Detector reset\n\
+     8: Auto callback download\n\
+     9: Manual pickup download\n\
+    10: Enable silent exit\n\
+    11: Perform test\n\
+    12: Group bypass\n\
+    13: Aux function 1\n\
+    14: Aux function 2\n\
+    15: Start keypad sounder\n\
 ");
 }
 
@@ -129,20 +156,23 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 int
 main(int argc, char *argv[])
 {
-	int i, fd = -1, poll_part = 0;
+	int i, fd = -1, poll_part = 0, pri_fn = -1, sec_fn = -1, pin = -1;
 	char *host = strdup(DEFAULT_HOST), *port;
 	int part_status_count = 1, part_status_freq = 30;
 	uint8_t buf[128], len;
 	struct addrinfo gai = { 0 }, *ai, *pai;
 	struct sigaction action;
 
-	while ((i = getopt(argc, argv, "e:fH:v")) != -1) {
+	while ((i = getopt(argc, argv, "e:fH:P:vX:x:")) != -1) {
 		switch (i) {
 		case 'e': notify_proc = optarg; break;
 		case 'f': fg = 1; break;
 		case 'H': free(host); host = strdup(optarg); break;
+		case 'P': pin = strtol(optarg, NULL, 0); break;
 		case 'p': poll_part = strtol(optarg, NULL, 0) - 1; break;
 		case 'v': loglevel++; break;
+		case 'X': sec_fn = strtol(optarg, NULL, 0); break;
+		case 'x': pri_fn = strtol(optarg, NULL, 0); break;
 		default: usage(); return -1;
 		}
 	}
@@ -188,6 +218,50 @@ main(int argc, char *argv[])
 		if (!errno)
 			errno = EINVAL;
 		ERR(errno);
+	}
+
+	if (pri_fn) {
+		if (pin >= 0) {
+			struct caddx_keypad_func0 func = {{ 0 }};
+			func.msg.type = CADDX_KEYPAD_FUNC0;
+			func.msg.ack = 1;
+			if (pin > 9999) {
+				func.pin1 = (pin / 100000) % 10;
+				func.pin2 = (pin /  10000) % 10;
+				func.pin3 = (pin /   1000) % 10;
+				func.pin4 = (pin /    100) % 10;
+				func.pin5 = (pin /     10) % 10;
+				func.pin6 = (pin /      1) % 10;
+			} else {
+				func.pin1 = (pin / 1000) % 10;
+				func.pin2 = (pin /  100) % 10;
+				func.pin3 = (pin /   10) % 10;
+				func.pin4 = (pin /    1) % 10;
+			}
+			func.function = pri_fn;
+			func.part = (1 << poll_part);
+			if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
+				ERR(-errno);
+			goto error;
+		} else {
+			struct caddx_keypad_func0_nopin func = {{ 0 }};
+			func.msg.type = CADDX_KEYPAD_FUNC0_NOPIN;
+			func.msg.ack = 1;
+			func.function = pri_fn;
+			func.part = (1 << poll_part);
+			if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
+				ERR(-errno);
+			goto error;
+		}
+	} else if (sec_fn) {
+		struct caddx_keypad_func1 func = {{ 0 }};
+		func.msg.type = CADDX_KEYPAD_FUNC1;
+		func.msg.ack = 1;
+		func.function = sec_fn;
+		func.part = (1 << poll_part);
+		if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
+			ERR(-errno);
+		goto error;
 	}
 
 	while (!quit) {

@@ -147,4 +147,100 @@ struct caddx_part_status {
 	bool delay_trip_in_progress:1;
 } __packed;
 
+#define CADDX_KEYPAD_FUNC0	0x3c
+struct caddx_keypad_func0 {
+	struct caddx_msg msg;
+
+	uint8_t pin1:4;
+	uint8_t pin2:4;
+
+	uint8_t pin3:4;
+	uint8_t pin4:4;
+
+	uint8_t pin5:4;
+	uint8_t pin6:4;
+
+	uint8_t function;
+#define CADDX_TURN_OFF_SOUNDER	0x00
+#define CADDX_DISARM		0x01
+#define CADDX_ARM_AWAY		0x02
+#define CADDX_ARM_STAY		0x03
+#define CADDX_CANCEL		0x04
+#define CADDX_AUTO_ARM		0x05
+#define CADDX_START_WALK_TEST	0x06
+#define CADDX_STOP_WALK_TEST	0x07
+
+	union {
+		struct {
+			uint8_t part1:1;
+			uint8_t part2:1;
+			uint8_t part3:1;
+			uint8_t part4:1;
+			uint8_t part5:1;
+			uint8_t part6:1;
+			uint8_t part7:1;
+			uint8_t part8:1;
+		};
+		uint8_t part;
+	};
+};
+
+#define CADDX_KEYPAD_FUNC0_NOPIN	0x3d
+struct caddx_keypad_func0_nopin {
+	struct caddx_msg msg;
+
+	uint8_t function;
+
+	union {
+		struct {
+			uint8_t part1:1;
+			uint8_t part2:1;
+			uint8_t part3:1;
+			uint8_t part4:1;
+			uint8_t part5:1;
+			uint8_t part6:1;
+			uint8_t part7:1;
+			uint8_t part8:1;
+		};
+		uint8_t part;
+	};
+};
+
+#define CADDX_KEYPAD_FUNC1	0x3e
+struct caddx_keypad_func1 {
+	struct caddx_msg msg;
+
+#define CADDX_STAY		0x00
+#define CADDX_CHIME		0x01
+#define CADDX_EXIT		0x02
+#define CADDX_BYPASS_INTERIORS	0x03
+#define CADDX_FIRE_PANIC	0x04
+#define CADDX_MEDICAL_PANIC	0x05
+#define CADDX_POLICE_PANIC	0x06
+#define CADDX_SMOKE_RESET	0x07
+#define CADDX_AUTO_CALLBACK	0x08
+#define CADDX_MANUAL_PICKUP	0x09
+#define CADDX_SILENT_EXIT_ON	0x0a
+#define CADDX_PERFORM_TEST	0x0b
+#define CADDX_GROUP_BYPASS	0x0c
+#define CADDX_AUX1		0x0d
+#define CADDX_AUX2		0x0e
+#define CADDX_KEYPAD_SOUNDER	0x0f
+	uint8_t function;
+
+	union {
+		struct {
+			uint8_t part1:1;
+			uint8_t part2:1;
+			uint8_t part3:1;
+			uint8_t part4:1;
+			uint8_t part5:1;
+			uint8_t part6:1;
+			uint8_t part7:1;
+			uint8_t part8:1;
+		};
+		uint8_t part;
+	};
+};
+
 #endif /* __CADDX_H__ */
