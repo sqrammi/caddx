@@ -119,15 +119,38 @@ caddx_rm_client(struct caddx_client *cl)
 	free(cl);
 }
 
-#define _CADDX_RX(len, dbg) do { \
+static int
+caddx_rx_bytes(int fd, uint8_t *buf, uint32_t len)
+{
+	uint32_t _len = len;
+	for (; len; len--) {
+		if (full_read(fd, buf, 1, 0) < 0)
+			return -1;
+		debug("  read %02x\n", *buf);
+		if (*buf == CADDX_START - 1) {
+			if (full_read(fd, buf, 1, 0) < 0)
+				return -1;
+			debug("  read %02x\n", *buf);
+			*buf ^= CADDX_START_ESC;
+		}
+		buf++;
+	}
+	return _len;
+}
+
+#define _CADDX_RX(len, add) do { \
 	debug("read %d @%d\n", len, __LINE__); \
-	if (full_read(fd, buf + done, len, 0) != len) \
+	if (caddx_rx_bytes(fd, buf + done, len) != len) \
 		ERR(errno); \
+	done += (add); \
 } while (0)
-#define CADDX_RX(len) _CADDX_RX(len, 0)
+#define CADDX_RX(len) do { \
+	typeof(len) __len = (len); \
+	_CADDX_RX(__len, __len); \
+} while (0)
 
 static int
-caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
+caddx_rx_pkt(int fd, uint8_t *buf, uint32_t maxlen)
 {
 	int done = 0, len, _len;
 	uint16_t cksum;
@@ -135,8 +158,11 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 	struct caddx_msg *msg;
 
 	buf[0] = 0;
-	while (buf[0] != CADDX_START)
-		CADDX_RX(1);
+	while (buf[0] != CADDX_START && !quit)
+		_CADDX_RX(1, 0);
+
+	if (quit)
+		ERR(EINTR);
 
 	CADDX_RX(1);
 	_len = len = buf[0];
@@ -144,15 +170,9 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 	if (len > maxlen - 3)
 		ERR(EINVAL);
 
-	for (done = 1; len; len--, done++) {
-		CADDX_RX(1);
-		if (buf[done] == CADDX_START - 1) {
-			CADDX_RX(1);
-			buf[done] ^= CADDX_START_ESC;
-		}
-	}
+	CADDX_RX(len);
+	_CADDX_RX(2, 0);
 
-	_CADDX_RX(2, 1);
 	cksum = fletcher_cksum(buf, _len + 1);
 
 	if (!buf[0])
@@ -161,6 +181,7 @@ caddx_rx(int fd, uint8_t *buf, uint32_t maxlen)
 	if (cksum >> 8 != buf[done] || (cksum & 0xff) != buf[done + 1]) {
 		uint8_t nak = CADDX_NAK;
 		caddx_tx(fd, &nak, 1);
+		warn("bad cksum: %02x%02x vs %04x\n", buf[done], buf[done + 1 ], cksum);
 		ERR(EPROTO);
 	}
 
@@ -428,7 +449,7 @@ main(int argc, char *argv[])
 		tv.tv_usec = 0;
 		i = select(max_fd + 1, &fds, NULL, NULL, &tv);
 		if (can_read(fd)) {
-			caddx_rx(fd, buf, sizeof(buf));
+			caddx_rx_pkt(fd, buf, sizeof(buf));
 			caddx_parse(fd, buf + 1, buf[0]);
 		}
 		if (can_read(sfd)) {
