@@ -17,6 +17,7 @@
 
 #include "caddx.h"
 #include "util.h"
+#include "/home/ninkid/bin/hex-libc.c"
 
 #define DEFAULT_TTYNAME	"/dev/ttyUSB0"
 #define DEFAULT_BAUD	38400
@@ -51,6 +52,20 @@ static struct caddx_client *clients = NULL;
  * N: Fletcher sum2
  */
 
+static void
+caddx_stuff(uint8_t *buf, uint8_t val, uint32_t *inc)
+{
+	*buf = val;
+	if (*buf == CADDX_START) {
+		(*buf)--;
+		*(buf + 1) = *buf ^ CADDX_START_ESC;
+		(*inc)++;
+	} else if (*buf == CADDX_START - 1) {
+		*(buf + 1) = *buf ^ CADDX_START_ESC;
+		(*inc)++;
+	}
+}
+
 static int
 caddx_tx(int fd, uint8_t *msg, uint32_t len)
 {
@@ -58,31 +73,28 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len)
 	uint32_t escs = 0, i, j = 0;
 	uint16_t cksum;
 
+	warn("%s: %d\n", __func__, len);
+	if (loglevel >= 2)
+		hexdump(msg, len);
+
 	for (p = msg; p < msg + len; p++)
 		if (*p == CADDX_START || *p == CADDX_START - 1)
 			escs++;
-	if (!(p = malloc(2 + len + escs + 2)))
+	if (!(p = malloc(2 + len + escs + 2 + 2)))
 		ERR(ENOMEM);
 	p[0] = CADDX_START;
 	p[1] = len;
 	memcpy(p + 2, msg, len);
 	cksum = fletcher_cksum(p + 1, len + 1);
 
-	if (escs) {
-		for (i = 0; i < len; i++) {
-			p[2 + i + j] = msg[i];
-			if (msg[i] == CADDX_START) {
-				p[2 + i +   j++]--;
-				p[2 + i +     j] = CADDX_START ^ CADDX_START_ESC;
-			} else if (msg[i] == CADDX_START - 1) {
-				p[2 + i + (++j)] = (CADDX_START - 1) ^ CADDX_START_ESC;
-			}
-		}
-	}
+	if (escs)
+		for (i = 0; i < len; i++)
+			caddx_stuff(&p[2 + i + j], msg[i], &j);
 
-	p[2 + len + escs + 0] = cksum >> 8;
-	p[2 + len + escs + 1] = cksum & 0xff;
-	len = 2 + len + escs + 2;
+	j = 0;
+	caddx_stuff(&p[2 + len + escs + 0 + j], cksum >> 8, &j);
+	caddx_stuff(&p[2 + len + escs + 1 + j], cksum & 0xff, &j);
+	len = 2 + len + escs + 2 + j;
 
 #if 0
 	printf("^^ tx:\n");
@@ -105,7 +117,7 @@ caddx_rm_client(struct caddx_client *cl)
 {
 	struct caddx_client *l;
 
-	warn("rm client %d\n", cl->fd);
+	warn("%p: rm client %d\n", cl, cl->fd);
 	close(cl->fd); /* TODO: Check retval? */
 
 	if (cl == clients) {
@@ -228,6 +240,7 @@ serial_init(int fd)
 	struct termios tio;
 	uint32_t i;
 
+	errno = 0;
 	tcgetattr(fd, &tio_old);
 
 	for (i = 0; i < ARRAY_SIZE(baud_rates); i++)
@@ -260,6 +273,10 @@ static int
 caddx_parse(int fd, uint8_t *buf, uint32_t len)
 {
 	struct caddx_msg *msg = (struct caddx_msg *)buf;
+
+	warn("%s: %d\n", __func__, len);
+	if (loglevel >= 2)
+		hexdump(buf, len);
 
 	switch (msg->type) {
 	case CADDX_IFACE_CFG:
@@ -307,6 +324,7 @@ handle_connect(int sfd)
 {
 	struct timeval timeout = { 0 };
 	struct caddx_client *cl = malloc(sizeof(*cl)), *p;
+	errno = 0;
 	if (!cl)
 		ERR(ENOMEM);
 
@@ -324,7 +342,7 @@ handle_connect(int sfd)
 		for (p = clients; p->next; p = p->next) {}
 		p->next = cl;
 	}
-	warn("add client %d\n", cl->fd);
+	warn("%p: add client %d\n", cl, cl->fd);
 
 	/* FALLTHROUGH */
  error:
@@ -340,18 +358,24 @@ client_read(int fd, struct caddx_client *cl)
 {
 	uint8_t len, buf[128];
 
+	debug("%p: clread from %d\n", cl, cl->fd);
 	if (full_read(cl->fd, &len, 1, 1) < 0 ||
 	    len > sizeof(buf)) {
 		err("failed read %d\n", cl->fd);
 		caddx_rm_client(cl);
 		return -1;
 	}
+	debug("clread %d\n", len);
 
 	if (full_read(cl->fd, buf, len, 1) < 0) {
 		err("failed read2 %d\n", cl->fd);
 		caddx_rm_client(cl);
 		return -1;
 	}
+	debug("clread got %d\n", len);
+	warn("%s: %d\n", __func__, len);
+	if (loglevel >= 2)
+		hexdump(buf, len);
 
 	caddx_tx(fd, buf, len);
 	return 0;
