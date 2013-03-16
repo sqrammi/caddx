@@ -84,6 +84,12 @@ struct caddx_zone_status {
 	bool reserved87:1;
 } __packed;
 
+#define CADDX_ZONE_STATUS_REQ	0x24
+struct caddx_zone_status_req {
+	struct caddx_msg msg;
+	uint8_t zone;
+};
+
 #define CADDX_PART_STATUS	0x06
 struct caddx_part_status {
 	struct caddx_msg msg;
@@ -241,6 +247,12 @@ struct caddx_keypad_func1 {
 		};
 		uint8_t part;
 	};
+};
+
+#define CADDX_BYPASS_TOGGLE	0x3f
+struct caddx_bypass_toggle {
+	struct caddx_msg msg;
+	uint8_t zone;
 };
 
 #endif /* __CADDX_H__ */

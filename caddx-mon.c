@@ -153,18 +153,78 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 	}
 }
 
+static int
+caddx_rx_pkt(int fd, uint8_t *buf, uint8_t *maxlen)
+{
+	uint8_t len = 0;
+
+	errno = 0;
+	if (full_read(fd, &len, 1, 1) != 1)
+		ERR(-EIO);
+	if (len > *maxlen)
+		ERR(-EIO);
+	if (full_read(fd, buf, len, 1) != len)
+		ERR(-EIO);
+	*maxlen = len;
+
+	/* FALLTHROUGH */
+ error:
+	if (errno)
+		return -1;
+	else return 0;
+}
+
+static int
+caddx_rx_pkt_type(int fd, uint8_t *buf, uint8_t *maxlen, uint8_t type)
+{
+	uint32_t _maxlen = *maxlen;
+	struct caddx_msg *msg = (struct caddx_msg *)buf;
+	msg->type = 0x3f;
+	while (!quit && msg->type != type) {
+		*maxlen = _maxlen;
+		if (caddx_rx_pkt(fd, buf, maxlen) < 0)
+			return -1;
+	}
+	return 0;
+}
+
+static int
+caddx_zone_status(int fd, int zone, uint8_t *buf, uint8_t *maxlen)
+{
+	struct caddx_zone_status_req *req = (struct caddx_zone_status_req *)&buf[1];
+	errno = 0;
+	buf[0] = sizeof(*req);
+		memset(req, 0, sizeof(*req));
+	req->msg.type = CADDX_ZONE_STATUS_REQ;
+	req->zone = zone;
+	if (full_write(fd, buf, 1 + sizeof(*req), 1) < 0)
+		ERR(errno);
+	if (caddx_rx_pkt_type(fd, buf, maxlen, CADDX_ZONE_STATUS) < 0)
+		ERR(errno);
+
+	/* FALLTHROUGH */
+ error:
+	if (errno)
+		return -1;
+	else return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
 	int i, fd = -1, poll_part = 0, pri_fn = -1, sec_fn = -1, pin = -1;
+	struct timeval tv;
+	int bypass = -1, no_bypass = -1;
 	char *host = strdup(DEFAULT_HOST), *port;
 	int part_status_count = 1, part_status_freq = 30;
 	uint8_t buf[128], len;
 	struct addrinfo gai = { 0 }, *ai, *pai;
 	struct sigaction action;
 
-	while ((i = getopt(argc, argv, "e:fH:P:vX:x:")) != -1) {
+	while ((i = getopt(argc, argv, "B:b:e:fH:P:vX:x:")) != -1) {
 		switch (i) {
+		case 'b': bypass = strtol(optarg, NULL, 0) - 1; break;
+		case 'B': no_bypass = strtol(optarg, NULL, 0) - 1; break;
 		case 'e': notify_proc = optarg; break;
 		case 'f': fg = 1; break;
 		case 'H': free(host); host = strdup(optarg); break;
@@ -220,6 +280,10 @@ main(int argc, char *argv[])
 		ERR(errno);
 	}
 
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
 	if (pri_fn >= 0) {
 		if (pin >= 0) {
 			struct caddx_keypad_func0 func = {{ 0 }};
@@ -242,9 +306,9 @@ main(int argc, char *argv[])
 			func.part = (1 << poll_part);
 			buf[0] = sizeof(func);
 			if (full_write(fd, buf, 1, 1) < 0)
-				ERR(-errno);
+				ERR(errno);
 			if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
-				ERR(-errno);
+				ERR(errno);
 			goto error;
 		} else {
 			struct caddx_keypad_func0_nopin func = {{ 0 }};
@@ -254,9 +318,9 @@ main(int argc, char *argv[])
 			func.part = (1 << poll_part);
 			buf[0] = sizeof(func);
 			if (full_write(fd, buf, 1, 1) < 0)
-				ERR(-errno);
+				ERR(errno);
 			if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
-				ERR(-errno);
+				ERR(errno);
 			goto error;
 		}
 	} else if (sec_fn >= 0) {
@@ -267,10 +331,37 @@ main(int argc, char *argv[])
 		func.part = (1 << poll_part);
 		buf[0] = sizeof(func);
 		if (full_write(fd, buf, 1, 1) < 0)
-			ERR(-errno);
+			ERR(errno);
 		if (full_write(fd, (uint8_t *)&func, sizeof(func), 1) < 0)
-			ERR(-errno);
+			ERR(errno);
 		goto error;
+	} else if (bypass >= 0 || no_bypass >= 0) {
+		struct caddx_zone_status *status = (struct caddx_zone_status *)buf;
+		struct caddx_bypass_toggle *toggle = (struct caddx_bypass_toggle *)&buf[1];
+		uint8_t zone = (bypass >= 0) ? bypass : no_bypass;
+		len = sizeof(buf);
+		if (caddx_zone_status(fd, zone, buf, &len) < 0)
+			ERR(errno);
+		if ((bypass >= 0 && status->bypassed) ||
+		    (no_bypass >= 0 && !status->bypassed))
+			goto error;
+
+		buf[0] = sizeof(*toggle);
+		memset(toggle, 0, sizeof(*toggle));
+		toggle->msg.type = CADDX_BYPASS_TOGGLE;
+		toggle->zone = zone;
+		if (full_write(fd, buf, 1 + sizeof(*toggle), 1) < 0)
+			ERR(errno);
+
+		len = sizeof(buf);
+		if (caddx_zone_status(fd, zone, buf, &len) < 0)
+			ERR(errno);
+		if ((bypass >= 0 && status->bypassed) ||
+		    (no_bypass >= 0 && !status->bypassed))
+			goto error;
+
+		printf("could not (un)bypass\n");
+		ERR(EIO);
 	}
 
 	while (!quit) {
@@ -284,7 +375,7 @@ main(int argc, char *argv[])
 		if ((i = select(fd + 1, &fds, NULL, NULL, &tv)) < 0) {
 			if (errno == EINTR)
 				continue;
-			ERR(-errno);
+			ERR(errno);
 		}
 
 		if (i == 0) {
@@ -298,12 +389,9 @@ main(int argc, char *argv[])
 			continue;
 		}
 
-		if (full_read(fd, &len, 1, 1) != 1)
-			ERR(-EIO);
-		if (len > sizeof(buf))
-			ERR(-EIO);
-		if (full_read(fd, buf, len, 1) != len)
-			ERR(-EIO);
+		len = sizeof(buf);
+		if (caddx_rx_pkt(fd, buf, &len) < 0)
+			ERR(errno);
 		caddx_parse(fd, buf, len);
 	}
 
