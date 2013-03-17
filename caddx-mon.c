@@ -213,6 +213,7 @@ int
 main(int argc, char *argv[])
 {
 	int i, fd = -1, poll_part = 0, pri_fn = -1, sec_fn = -1, pin = -1;
+	int do_status = 0;
 	struct timeval tv;
 	int bypass = -1, no_bypass = -1;
 	char *host = strdup(DEFAULT_HOST), *port;
@@ -221,18 +222,19 @@ main(int argc, char *argv[])
 	struct addrinfo gai = { 0 }, *ai, *pai;
 	struct sigaction action;
 
-	while ((i = getopt(argc, argv, "B:b:e:fH:P:vX:x:")) != -1) {
+	while ((i = getopt(argc, argv, "B:b:e:fH:P:svX:x:")) != -1) {
 		switch (i) {
-		case 'b': bypass = strtol(optarg, NULL, 0) - 1; break;
-		case 'B': no_bypass = strtol(optarg, NULL, 0) - 1; break;
+		case 'b': bypass = strtol(optarg, NULL, 0) - 1; fg = 1; break;
+		case 'B': no_bypass = strtol(optarg, NULL, 0) - 1; fg = 1; break;
 		case 'e': notify_proc = optarg; break;
 		case 'f': fg = 1; break;
 		case 'H': free(host); host = strdup(optarg); break;
 		case 'P': pin = strtol(optarg, NULL, 10); break;
 		case 'p': poll_part = strtol(optarg, NULL, 0) - 1; break;
+		case 's': do_status = 1; fg = 1; break;
 		case 'v': loglevel++; break;
-		case 'X': sec_fn = strtol(optarg, NULL, 0); break;
-		case 'x': pri_fn = strtol(optarg, NULL, 0); break;
+		case 'X': sec_fn = strtol(optarg, NULL, 0); fg = 1; break;
+		case 'x': pri_fn = strtol(optarg, NULL, 0); fg = 1; break;
 		default: usage(); return -1;
 		}
 	}
@@ -362,6 +364,32 @@ main(int argc, char *argv[])
 
 		printf("could not (un)bypass\n");
 		ERR(EIO);
+	} else if (do_status) {
+		struct caddx_part_status *status = (struct caddx_part_status *)buf;
+		struct caddx_part_status_req *req = (struct caddx_part_status_req *)&buf[1];
+
+		buf[0] = sizeof(*req);
+		memset(req, 0, sizeof(*req));
+		req->msg.type = CADDX_PART_STATUS_REQ;
+		req->part = poll_part;
+		if (full_write(fd, buf, 1 + sizeof(*req), 1) < 0)
+			ERR(errno);
+
+		len = sizeof(buf);
+		if (caddx_rx_pkt_type(fd, buf, &len, CADDX_PART_STATUS) < 0)
+			ERR(errno);
+
+		if (status->exit1) {
+			printf("Arming (exit1).\n");
+		} else if (status->exit2) {
+			printf("Arming (exit2).\n");
+		} else if (status->entryguard && status->armed)
+			printf("Armed (in stay mode).\n");
+		else if (status->armed)
+			printf("Armed.\n");
+		else printf ("Not armed.\n");
+
+		goto error;
 	}
 
 	while (!quit) {

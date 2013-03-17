@@ -84,6 +84,12 @@ struct caddx_zone_status {
 	bool reserved87:1;
 } __packed;
 
+#define CADDX_PART_STATUS_REQ	0x26
+struct caddx_part_status_req {
+	struct caddx_msg msg;
+	uint8_t part;
+};
+
 #define CADDX_ZONE_STATUS_REQ	0x24
 struct caddx_zone_status_req {
 	struct caddx_msg msg;
