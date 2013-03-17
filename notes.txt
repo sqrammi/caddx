@@ -1,3 +1,41 @@
+  Location #207
+   1     (Enable NX584)
+  Location #208 Seg 1
+   4     (38400 baud)
+  Location #209
+   All off  (binary protocol)
+  Location #210 Seg #1   (send transition info)
+   2     (Interface config)
+   5     (Zone Status)
+   6     (Zone Snapshot)
+   7     (Partition Status)
+   8     (Partition Snapshot)
+  Location #210 Seg #2
+   1     (System Status msg)
+   2     (X10 Msg rcvd)
+  Location #211 Seg #1   (Enable requests via serial port)
+   2     (Interface configuration request)
+   4     (Zone name request)
+   5     (Zone status request)
+   6     (zone snapshot request)
+   7     (partition status request)
+   8     (partition snapshot request)
+  Location #211 Seg #2
+   1     (system status request)
+   2     (send X10 msg)
+   3     (log event request)
+  Location #211 Seg #3
+   1     (program data request)
+   2     (program data command)
+   3     (user info request with pin)
+   5     (set user code command with pin)
+   7     (set user authorization command with pin)
+  Location #211 Seg #4
+   4     (set clock/calendar)
+   5     (primary keypad function w/pin)
+   7     (secondary keypad function)
+   8     (zone bypass toggle)
+
 7FD5F870                                         86 00 20 00              .. .
 7FD5F880  00 40 01 00  82                                     .@...           
 7FD5F870                                         86 00 20 00              .. .
