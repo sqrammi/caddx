@@ -17,7 +17,9 @@
 
 #include "caddx.h"
 #include "util.h"
-#include "/home/ninkid/bin/hex-libc.c"
+#ifdef HEXDUMP
+#include "hex-libc.c"
+#endif
 
 #define DEFAULT_TTYNAME	"/dev/ttyUSB0"
 #define DEFAULT_BAUD	38400
@@ -74,8 +76,10 @@ caddx_tx(int fd, uint8_t *msg, uint32_t len)
 	uint16_t cksum;
 
 	warn("%s: %d\n", __func__, len);
+#ifdef HEXDUMP
 	if (loglevel >= 2)
 		hexdump(msg, len);
+#endif
 
 	for (p = msg; p < msg + len; p++)
 		if (*p == CADDX_START || *p == CADDX_START - 1)
@@ -275,8 +279,10 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 	struct caddx_msg *msg = (struct caddx_msg *)buf;
 
 	warn("%s: %d\n", __func__, len);
+#ifdef HEXDUMP
 	if (loglevel >= 2)
 		hexdump(buf, len);
+#endif
 
 	switch (msg->type) {
 	case CADDX_IFACE_CFG:
@@ -374,8 +380,10 @@ client_read(int fd, struct caddx_client *cl)
 	}
 	debug("clread got %d\n", len);
 	warn("%s: %d\n", __func__, len);
+#ifdef HEXDUMP
 	if (loglevel >= 2)
 		hexdump(buf, len);
+#endif
 
 	caddx_tx(fd, buf, len);
 	return 0;

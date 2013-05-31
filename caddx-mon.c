@@ -13,7 +13,9 @@
 
 #include "caddx.h"
 #include "util.h"
-#include "/home/ninkid/bin/hex-libc.c"
+#ifdef HEXDUMP
+#include "hex-libc.c"
+#endif
 
 #define DEFAULT_HOST	"127.0.0.1:1587"
 
@@ -147,8 +149,10 @@ caddx_parse(int fd, uint8_t *buf, uint32_t len)
 	}
 	default:
 	error:
+#ifdef HEXDUMP
 		if (loglevel >= 1)
 			hexdump(buf, len);
+#endif
 		break;
 	}
 }
